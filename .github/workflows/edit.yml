@@ -1,0 +1,177 @@
+name: Ultimate One-Time API Drive Video Editor
+
+on:
+  workflow_dispatch:
+    inputs:
+      gdrive_url:
+        description: 'Google Drive Folder Shareable Link'
+        required: true
+
+jobs:
+  ai_fresh_edit:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install System Dependencies & Python Packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg curl fonts-dejavu
+        python -m pip install --upgrade pip
+        pip install --upgrade --no-cache-dir gdown google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+    - name: Process Video & Direct Save To Drive
+      env:
+        GDRIVE_URL: ${{ github.event.inputs.gdrive_url }}
+        GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
+      run: |
+        cat << 'EOF' > auto_drive_process.py
+        import subprocess, sys, os, glob, random, json
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+
+        g_url = os.environ.get('GDRIVE_URL', '').strip()
+        sa_json_str = os.environ.get('GDRIVE_SA_JSON', '').strip()
+
+        os.makedirs("edited_output", exist_ok=True)
+        os.makedirs("temp_download", exist_ok=True)
+
+        if not sa_json_str:
+            print("❌ Error: GDRIVE_SERVICE_ACCOUNT secret missing in GitHub!")
+            sys.exit(1)
+
+        try:
+            sa_info = json.loads(sa_json_str)
+            creds = service_account.Credentials.from_service_account_info(
+                sa_info, scopes=['https://www.googleapis.com/auth/drive']
+            )
+            drive_service = build('drive', 'v3', credentials=creds)
+            print("🔑 Google Drive API Authenticated!")
+
+            folder_name = "AI Video Editor"
+            query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
+            results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+            items = results.get('files', [])
+
+            if not items:
+                file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+                target_folder_id = folder.get('id')
+                print(f"📁 Created 'AI Video Editor' Folder in your Google Drive.")
+            else:
+                target_folder_id = items[0]['id']
+                print(f"📁 Target Folder Found: 'AI Video Editor'")
+
+        except Exception as e:
+            print(f"❌ Drive Authentication Failed: {e}")
+            sys.exit(1)
+
+        print("🔍 Downloading Raw Videos from Google Drive link...")
+        dl_cmd = ['gdown', '--folder', '--remaining-ok', g_url, '-O', 'temp_download']
+
+        try:
+            subprocess.run(dl_cmd, check=True)
+        except Exception:
+            try:
+                gdown_file_cmd = ['gdown', g_url, '-O', 'temp_download/video.mp4']
+                subprocess.run(gdown_file_cmd, check=True)
+            except Exception as ex:
+                print("❌ Download failed. Check Drive Link Permissions!")
+                sys.exit(1)
+
+        video_extensions = ('*.mp4', '*.mkv', '*.mov', '*.avi', '*.webm')
+        raw_videos = []
+        for ext in video_extensions:
+            raw_videos.extend(glob.glob(f"temp_download/**/{ext}", recursive=True))
+
+        raw_videos.sort()
+
+        if not raw_videos:
+            print("❌ No videos found!")
+            sys.exit(1)
+
+        print(f"🔥 Found {len(raw_videos)} video(s). Editing & Direct Drive Uploading...\n")
+
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+        for idx, video_path in enumerate(raw_videos, 1):
+            original_filename = os.path.basename(video_path)
+            clean_filename = os.path.splitext(original_filename)[0] + "_AI_FRESH.mp4"
+            final_output_path = os.path.join("edited_output", clean_filename)
+
+            print("==================================================")
+            print(f"🎬 Processing Video [{idx}/{len(raw_videos)}]: {original_filename}")
+            print("==================================================")
+
+            contrast_val = round(random.uniform(1.03, 1.08), 2)
+            saturation_val = round(random.uniform(1.05, 1.12), 2)
+            noise_val = random.randint(5, 9)
+
+            filter_v = (
+                "hflip,"
+                "scale=1980:1113:force_original_aspect_ratio=increase,"
+                f"crop=1920:1080:(iw-1920)/2+(sin(n/18)*15):(ih-1080)/2+(cos(n/18)*10),"
+                f"eq=contrast={contrast_val}:saturation={saturation_val}:brightness=0.015:gamma=1.02,"
+                f"noise=alls={noise_val}:allf=t+u,"
+                "vignette='PI/3.7',"
+                "unsharp=3:3:1.0:3:3:1.0,"
+                f"drawtext=fontfile='{font_path}':text='AI SETORI':x=w-text_w-35:y=35:fontsize=26:fontcolor=white@0.22"
+            )
+
+            filter_a = "volume=1.04,asetrate=44100*1.012,aresample=44100,atempo=1/1.012"
+
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-vf', filter_v,
+                '-af', filter_a,
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', '19',
+                '-pix_fmt', 'yuv420p',
+                '-metadata', 'title=Original AI Content Render',
+                '-metadata', 'artist=AI Setori Studio',
+                '-metadata', 'encoder=Lavf60.3.100',
+                '-c:a', 'aac',
+                '-b:a', '160k',
+                '-ar', '44100',
+                '-async', '1',
+                '-vsync', '1',
+                final_output_path
+            ]
+
+            result = subprocess.run(ffmpeg_cmd)
+
+            if result.returncode == 0:
+                print(f"✅ Editing Complete: {clean_filename}")
+                print(f"☁️ Auto Uploading to Drive 'AI Video Editor' Folder...")
+                
+                file_metadata = {'name': clean_filename, 'parents': [target_folder_id]}
+                media = MediaFileUpload(final_output_path, mimetype='video/mp4', resumable=True)
+                uploaded_file = drive_service.files().create(
+                    body=file_metadata, media_body=media, fields='id'
+                ).execute()
+                print(f"🎉 Directly Saved in Drive! File ID: {uploaded_file.get('id')}\n")
+
+            else:
+                print(f"❌ Failed to process: {original_filename}\n")
+
+            try:
+                os.remove(video_path)
+            except Exception:
+                pass
+
+        print("🎉 All videos edited & saved directly into Google Drive 'AI Video Editor'!")
+
+        EOF
+
+        python auto_drive_process.py
+        
