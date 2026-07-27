@@ -70,19 +70,8 @@ jobs:
             drive_service = build('drive', 'v3', credentials=creds)
             print("🔑 Google Drive API Authenticated!")
 
-            target_folder_name = "AI Video Editor"
-            query_tf = f"mimeType='application/vnd.google-apps.folder' and name='{target_folder_name}' and trashed=false"
-            tf_results = drive_service.files().list(q=query_tf, fields="files(id, name)").execute()
-            tf_items = tf_results.get('files', [])
-
-            if not tf_items:
-                file_metadata = {'name': target_folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-                folder = drive_service.files().create(body=file_metadata, fields='id').execute()
-                target_folder_id = folder.get('id')
-                print(f"📁 Created '{target_folder_name}' Folder in your Google Drive.")
-            else:
-                target_folder_id = tf_items[0]['id']
-                print(f"📁 Target Output Folder Found: '{target_folder_name}'")
+            # Check inside user's provided shared folder or main target
+            target_folder_id = folder_or_file_id
 
         except Exception as e:
             print(f"❌ Drive Authentication Failed: {e}")
@@ -92,11 +81,20 @@ jobs:
         
         query_src = f"'{folder_or_file_id}' in parents and mimeType contains 'video/' and trashed=false"
         try:
-            results = drive_service.files().list(q=query_src, fields="files(id, name, mimeType)").execute()
+            results = drive_service.files().list(
+                q=query_src, 
+                fields="files(id, name, mimeType)",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
             items = results.get('files', [])
         except Exception:
             try:
-                file_single = drive_service.files().get(fileId=folder_or_file_id, fields="id, name, mimeType").execute()
+                file_single = drive_service.files().get(
+                    fileId=folder_or_file_id, 
+                    fields="id, name, mimeType",
+                    supportsAllDrives=True
+                ).execute()
                 items = [file_single] if file_single else []
             except Exception as ex:
                 print(f"❌ Drive API Fetch Error: {ex}")
@@ -177,11 +175,18 @@ jobs:
 
             if result.returncode == 0:
                 print(f"✅ Editing Complete: {clean_filename}")
-                print(f"☁️ Auto Uploading Full Edited Video to Drive 'AI Video Editor'...")
+                print(f"☁️ Auto Uploading Directly to Shared Folder...")
                 
+                # Fixed: Enforce uploading directly to shared user parent folder using supportsAllDrives
                 file_metadata = {'name': clean_filename, 'parents': [target_folder_id]}
                 media = MediaFileUpload(final_output_path, mimetype='video/mp4', chunksize=5*1024*1024, resumable=True)
-                request_upload = drive_service.files().create(body=file_metadata, media_body=media, fields='id')
+                
+                request_upload = drive_service.files().create(
+                    body=file_metadata, 
+                    media_body=media, 
+                    fields='id',
+                    supportsAllDrives=True
+                )
                 
                 uploaded_file = None
                 response = None
@@ -193,7 +198,7 @@ jobs:
                             print(f"  --> Upload Progress: {int(status.progress() * 100)}%")
                     except Exception as upload_err:
                         retry_count += 1
-                        print(f"⚠️ Connection dropped during upload, retrying ({retry_count}/5)... Error: {upload_err}")
+                        print(f"⚠️ Connection retry ({retry_count}/5)... Error: {upload_err}")
                         time.sleep(5)
                         if retry_count > 5:
                             raise upload_err
@@ -208,7 +213,7 @@ jobs:
             except Exception:
                 pass
 
-        print("🎉 All videos edited & saved directly into Google Drive 'AI Video Editor'!")
+        print("🎉 All videos edited & saved directly into Google Drive Folder!")
 
         EOF
 
