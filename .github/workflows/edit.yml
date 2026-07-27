@@ -75,14 +75,14 @@ jobs:
             sys.exit(1)
 
         print("🔍 Downloading Raw Videos from Google Drive link...")
-        dl_cmd = ['gdown', '--folder', '--remaining-ok', g_url, '-O', 'temp_download']
+        dl_cmd = f"gdown --folder '{g_url}' -O temp_download --fuzzy"
 
         try:
-            subprocess.run(dl_cmd, check=True)
+            subprocess.run(dl_cmd, shell=True, check=True)
         except Exception:
             try:
-                gdown_file_cmd = ['gdown', g_url, '-O', 'temp_download/video.mp4']
-                subprocess.run(gdown_file_cmd, check=True)
+                gdown_file_cmd = f"gdown '{g_url}' -O temp_download/video.mp4 --fuzzy"
+                subprocess.run(gdown_file_cmd, shell=True, check=True)
             except Exception as ex:
                 print("❌ Download failed. Check Drive Link Permissions!")
                 sys.exit(1)
@@ -95,7 +95,7 @@ jobs:
         raw_videos.sort()
 
         if not raw_videos:
-            print("❌ No videos found!")
+            print("❌ No videos found in downloaded content!")
             sys.exit(1)
 
         print(f"🔥 Found {len(raw_videos)} video(s). Editing & Direct Drive Uploading...\n")
@@ -143,8 +143,6 @@ jobs:
                 '-c:a', 'aac',
                 '-b:a', '160k',
                 '-ar', '44100',
-                '-async', '1',
-                '-vsync', '1',
                 final_output_path
             ]
 
